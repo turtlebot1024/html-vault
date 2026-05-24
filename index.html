@@ -196,6 +196,7 @@
   #dbgLog { overflow-y: auto; padding: 10px 12px; white-space: pre-wrap; line-height: 1.6; }
   #dbgLog .err { color: #ff5252; }
   #dbgLog .stop { color: #ffab40; }
+  #dbgLog .click { color: #82b1ff; }
   #dbgToggle {
     position: fixed; left: 18px; z-index: 81;
     bottom: calc(24px + env(safe-area-inset-bottom));
@@ -309,6 +310,7 @@ function dbg(msg) {
   const isErr = /오류|!!/.test(msg);
   if (isErr) line.className = 'err';
   else if (/중단/.test(msg)) line.className = 'stop';
+  else if (/^▶/.test(msg)) line.className = 'click';
   line.textContent = `[${t}] ${msg}`;
   log.appendChild(line);
   log.scrollTop = log.scrollHeight;
@@ -317,6 +319,7 @@ function dbg(msg) {
     if (toggle) toggle.classList.add('has-err');
   }
 }
+function logClick(name, extra) { dbg('▶ 클릭: ' + name + (extra ? ' (' + extra + ')' : '')); }
 // 잡히지 않은 오류도 화면에 표시
 window.addEventListener('error', e => {
   dbg('!! 전역 오류: ' + (e.message || e.error) + ' @' + (e.filename||'').split('/').pop() + ':' + e.lineno);
@@ -396,7 +399,7 @@ function render() {
     const el = document.createElement('span');
     el.className = 'tag' + (activeTag === t ? ' active' : '');
     el.textContent = '#' + t;
-    el.onclick = () => { activeTag = activeTag === t ? null : t; render(); };
+    el.onclick = () => { logClick('태그', '#' + t); activeTag = activeTag === t ? null : t; render(); };
     tb.appendChild(el);
   });
 
@@ -436,19 +439,22 @@ function render() {
       </div>`;
     grid.appendChild(card);
   });
-  grid.querySelectorAll('[data-preview]').forEach(b => b.onclick = () => preview(b.dataset.preview));
-  grid.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openModal(b.dataset.edit));
-  grid.querySelectorAll('[data-del]').forEach(b => b.onclick = () => del(b.dataset.del));
+  grid.querySelectorAll('[data-preview]').forEach(b => b.onclick = () => { logClick('미리보기', b.dataset.preview); preview(b.dataset.preview); });
+  grid.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => { logClick('수정', b.dataset.edit); openModal(b.dataset.edit); });
+  grid.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { logClick('삭제', b.dataset.del); del(b.dataset.del); });
 }
 
 async function applyPreviewBg(mode) {
   const ov = document.getElementById('previewOverlay');
   const btn = document.getElementById('previewBgBtn');
-  if (!ov) return;
+  dbg('  배경 적용 시도: mode=' + mode + ', ov=' + (ov?'O':'X') + ', btn=' + (btn?'O':'X'));
+  if (!ov) { dbg('  중단: previewOverlay 없음'); return; }
   const m = mode === 'dark' ? 'dark' : 'light';
   ov.dataset.bg = m;
   if (btn) btn.textContent = m === 'dark' ? '⬛ 검' : '⬜ 흰';
-  await setSetting('previewBg', m);
+  dbg('  배경 적용 완료: data-bg=' + m + ', 버튼=' + (btn?btn.textContent:'?'));
+  try { await setSetting('previewBg', m); dbg('  설정 저장 OK'); }
+  catch(e) { dbg('!! 설정 저장 실패: ' + e.message); }
 }
 
 function preview(id) {
@@ -472,9 +478,27 @@ function preview(id) {
     dbg('7. 제목 설정 = ' + (titleEl ? 'O' : 'X'));
     const newTab = document.getElementById('previewNewTab');
     if (newTab) newTab.onclick = () => {
-      const w = window.open('', '_blank');
-      if (w) { w.document.open(); w.document.write(it.code); w.document.close(); }
-      else alert('새 탭이 차단됐어요. 브라우저에서 이 사이트의 팝업을 허용해주세요.');
+      logClick('새 탭');
+      try {
+        // 1순위: blob URL + a.click() — PWA standalone에서도 잘 동작
+        const blob = new Blob([it.code], {type: 'text/html'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.target = '_blank'; a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+        dbg('  새 탭(blob URL) 시도 완료');
+      } catch(e) {
+        dbg('!! blob 방식 실패: ' + e.message + ' → window.open 폴백');
+        try {
+          const w = window.open('', '_blank');
+          dbg('  window.open 결과 = ' + (w ? 'OK' : 'null(차단됨)'));
+          if (w) { w.document.open(); w.document.write(it.code); w.document.close(); }
+          else alert('새 탭이 차단됐어요. 브라우저에서 이 사이트의 팝업을 허용해주세요.');
+        } catch(e2) { dbg('!! 새 탭 오류: ' + e2.message); alert('새 탭 오류: ' + e2.message); }
+      }
     };
     ov.classList.add('open');
     dbg('8. open 클래스 추가 → 화면에 떠야 함');
@@ -574,19 +598,22 @@ function importData(file) {
 }
 
 /* ---------- 이벤트 ---------- */
-document.getElementById('addBtn').onclick = () => openModal();
-document.getElementById('fabBtn').onclick = () => openModal();
-document.getElementById('cancelBtn').onclick = closeModal;
-document.getElementById('saveBtn').onclick = saveCard;
-document.getElementById('overlay').onclick = e => { if (e.target.id === 'overlay') closeModal(); };
-document.getElementById('previewClose').onclick = closePreview;
+document.getElementById('addBtn').onclick = () => { logClick('새 카드 추가(상단)'); openModal(); };
+document.getElementById('fabBtn').onclick = () => { logClick('+ FAB'); openModal(); };
+document.getElementById('cancelBtn').onclick = () => { logClick('취소'); closeModal(); };
+document.getElementById('saveBtn').onclick = () => { logClick('저장'); saveCard(); };
+document.getElementById('overlay').onclick = e => { if (e.target.id === 'overlay') { logClick('모달 바깥 클릭'); closeModal(); } };
+document.getElementById('previewClose').onclick = () => { logClick('미리보기 닫기'); closePreview(); };
 document.getElementById('previewBgBtn').onclick = () => {
   const ov = document.getElementById('previewOverlay');
   const cur = ov.dataset.bg === 'dark' ? 'dark' : 'light';
+  logClick('배경 토글', cur + ' → ' + (cur === 'dark' ? 'light' : 'dark'));
   applyPreviewBg(cur === 'dark' ? 'light' : 'dark');
 };
 document.getElementById('dbgToggle').onclick = () => {
   const panel = document.getElementById('dbgPanel');
+  const opening = !panel.classList.contains('show');
+  logClick('🐞 디버그', opening ? '열기' : '닫기');
   panel.classList.toggle('show');
   document.getElementById('dbgToggle').classList.remove('has-err');
 };
@@ -598,12 +625,13 @@ document.getElementById('dbgCopy').onclick = () => {
   else alert(txt);
 };
 document.getElementById('searchInput').oninput = e => { query = e.target.value; render(); };
-document.getElementById('exportBtn').onclick = exportData;
-document.getElementById('importBtn').onclick = () => document.getElementById('importFile').click();
-document.getElementById('importFile').onchange = e => { if (e.target.files[0]) importData(e.target.files[0]); };
+document.getElementById('exportBtn').onclick = () => { logClick('내보내기'); exportData(); };
+document.getElementById('importBtn').onclick = () => { logClick('가져오기'); document.getElementById('importFile').click(); };
+document.getElementById('importFile').onchange = e => { if (e.target.files[0]) { dbg('가져오기 파일 선택: ' + e.target.files[0].name); importData(e.target.files[0]); } };
 document.getElementById('themeBtn').onclick = async () => {
   const cur = document.documentElement.getAttribute('data-theme');
   const next = cur === 'dark' ? 'light' : 'dark';
+  logClick('테마', (cur||'light') + ' → ' + next);
   document.documentElement.setAttribute('data-theme', next);
   await setSetting('theme', next);
 };
@@ -623,7 +651,8 @@ window.addEventListener('beforeinstallprompt', e => {
   document.getElementById('installBtn').style.display = 'inline-block';
 });
 document.getElementById('installBtn').onclick = async () => {
-  if (!deferredPrompt) return;
+  logClick('앱 설치');
+  if (!deferredPrompt) { dbg('  설치 프롬프트 없음'); return; }
   deferredPrompt.prompt();
   await deferredPrompt.userChoice;
   deferredPrompt = null;
@@ -631,7 +660,7 @@ document.getElementById('installBtn').onclick = async () => {
 };
 
 /* ---------- 버전 & 업데이트 감지 ---------- */
-const APP_VERSION = 'v1.3';
+const APP_VERSION = 'v1.4';
 document.getElementById('appVersion').textContent = APP_VERSION;
 
 function showUpdateBar() {
