@@ -161,6 +161,39 @@
   .preview-btns { display: flex; gap: 8px; flex-shrink: 0; }
   .preview-btns button { padding: 8px 12px; font-size: .76rem; }
   #previewFrame { flex: 1; width: 100%; border: none; background: #fff; }
+  #updateBar {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 70;
+    background: var(--ink); color: var(--bg); border-radius: 999px;
+    padding: 10px 14px 10px 20px; display: flex; align-items: center; gap: 12px;
+    font-family: 'Spline Sans Mono', monospace; font-size: .8rem;
+    box-shadow: 0 6px 24px rgba(0,0,0,.3); animation: slideUp .3s ease;
+  }
+  #updateBar button {
+    background: var(--accent); color: #fff; border: none; padding: 7px 14px;
+    border-radius: 999px; font-size: .76rem;
+  }
+  #updateBar button:hover { transform: none; box-shadow: none; }
+  @keyframes slideUp { from { opacity: 0; transform: translate(-50%, 20px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  #dbgPanel {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 80;
+    background: #0d0d0d; color: #00e676; font-family: 'Spline Sans Mono', monospace;
+    font-size: .72rem; max-height: 45vh; display: none; flex-direction: column;
+    border-top: 2px solid #00e676;
+  }
+  #dbgPanel.show { display: flex; }
+  #dbgHead {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 12px; background: #1a1a1a; color: #fff; flex-shrink: 0;
+  }
+  #dbgHead button {
+    background: #333; color: #fff; border: 1px solid #555; padding: 4px 10px;
+    font-size: .68rem; border-radius: 4px; margin-left: 6px;
+  }
+  #dbgHead button:hover { transform: none; box-shadow: none; background: #444; }
+  #dbgLog { overflow-y: auto; padding: 10px 12px; white-space: pre-wrap; line-height: 1.6; }
+  #dbgLog .err { color: #ff5252; }
+  #dbgLog .stop { color: #ffab40; }
 </style>
 </head>
 <body>
@@ -189,7 +222,7 @@
 
   <div class="tagbar" id="tagbar"></div>
   <div class="grid" id="grid"></div>
-  <footer>이 기기에 저장됩니다 (IndexedDB) · 내보내기로 백업하세요</footer>
+  <footer>이 기기에 저장됩니다 (IndexedDB) · 내보내기로 백업하세요 · <span id="appVersion"></span></footer>
 </div>
 
 <button class="fab" id="fabBtn" title="새 카드">+</button>
@@ -203,6 +236,18 @@
     </span>
   </div>
   <iframe id="previewFrame" sandbox="allow-scripts allow-popups allow-forms allow-modals"></iframe>
+</div>
+
+<div id="dbgPanel">
+  <div id="dbgHead">
+    <span>디버그 로그</span>
+    <span>
+      <button id="dbgCopy">복사</button>
+      <button id="dbgClear">지우기</button>
+      <button id="dbgHide">✕</button>
+    </span>
+  </div>
+  <div id="dbgLog"></div>
 </div>
 
 <div class="overlay" id="overlay">
@@ -239,6 +284,28 @@
 </div>
 
 <script>
+/* ---------- 디버그 로거 ---------- */
+function dbg(msg) {
+  const log = document.getElementById('dbgLog');
+  const panel = document.getElementById('dbgPanel');
+  if (!log || !panel) { console.log('[dbg]', msg); return; }
+  panel.classList.add('show');
+  const line = document.createElement('div');
+  const t = new Date().toLocaleTimeString();
+  if (/오류|!!/.test(msg)) line.className = 'err';
+  else if (/중단/.test(msg)) line.className = 'stop';
+  line.textContent = `[${t}] ${msg}`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+// 잡히지 않은 오류도 화면에 표시
+window.addEventListener('error', e => {
+  dbg('!! 전역 오류: ' + (e.message || e.error) + ' @' + (e.filename||'').split('/').pop() + ':' + e.lineno);
+});
+window.addEventListener('unhandledrejection', e => {
+  dbg('!! Promise 오류: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+});
+
 /* ---------- IndexedDB 저장 계층 ---------- */
 const DB_NAME = 'html-vault', STORE = 'items', SETTINGS = 'settings';
 function openDB() {
@@ -356,18 +423,41 @@ function render() {
 }
 
 function preview(id) {
-  const it = items.find(i => i.id === id);
-  if (!it || !it.code) { alert('이 카드에는 HTML 코드가 없어요. 연필(수정) 버튼을 눌러 코드를 넣어주세요.'); return; }
-  const ov = document.getElementById('previewOverlay');
-  const frame = document.getElementById('previewFrame');
-  frame.srcdoc = it.code;
-  document.getElementById('previewTitle').textContent = it.title || '미리보기';
-  document.getElementById('previewNewTab').onclick = () => {
-    const w = window.open('', '_blank');
-    if (w) { w.document.open(); w.document.write(it.code); w.document.close(); }
-    else alert('새 탭이 차단됐어요. 브라우저에서 이 사이트의 팝업을 허용해주세요.');
-  };
-  ov.classList.add('open');
+  dbg('--- 미리보기 시작 ---');
+  try {
+    dbg('1. id = ' + id);
+    const it = items.find(i => i.id === id);
+    dbg('2. 카드 찾음 = ' + (it ? 'O' : 'X'));
+    if (!it) { dbg('중단: 카드를 못 찾음'); return; }
+    dbg('3. code 길이 = ' + (it.code ? it.code.length : 0));
+    if (!it.code) { dbg('중단: 코드 비어있음'); alert('이 카드에는 HTML 코드가 없어요. 연필(수정) 버튼을 눌러 코드를 넣어주세요.'); return; }
+    const ov = document.getElementById('previewOverlay');
+    dbg('4. previewOverlay = ' + (ov ? 'O' : 'X(없음!)'));
+    const frame = document.getElementById('previewFrame');
+    dbg('5. previewFrame = ' + (frame ? 'O' : 'X(없음!)'));
+    if (!ov || !frame) { dbg('중단: 미리보기 요소가 없음 (파일 교체 안 됐을 수 있음)'); alert('미리보기 화면 요소가 없어요. index.html이 최신으로 교체됐는지 확인하세요.'); return; }
+    frame.srcdoc = it.code;
+    dbg('6. srcdoc 주입 완료');
+    const titleEl = document.getElementById('previewTitle');
+    if (titleEl) titleEl.textContent = it.title || '미리보기';
+    dbg('7. 제목 설정 = ' + (titleEl ? 'O' : 'X'));
+    const newTab = document.getElementById('previewNewTab');
+    if (newTab) newTab.onclick = () => {
+      const w = window.open('', '_blank');
+      if (w) { w.document.open(); w.document.write(it.code); w.document.close(); }
+      else alert('새 탭이 차단됐어요. 브라우저에서 이 사이트의 팝업을 허용해주세요.');
+    };
+    ov.classList.add('open');
+    dbg('8. open 클래스 추가 → 화면에 떠야 함');
+    // 실제로 보이는지 확인
+    setTimeout(() => {
+      const visible = getComputedStyle(ov).display;
+      dbg('9. overlay display = ' + visible + (visible === 'none' ? ' (안 보임! CSS 문제)' : ' (정상)'));
+    }, 50);
+  } catch (err) {
+    dbg('!! 오류 발생: ' + err.message);
+    alert('미리보기 오류: ' + err.message);
+  }
 }
 function closePreview(){
   const ov = document.getElementById('previewOverlay');
@@ -461,6 +551,13 @@ document.getElementById('cancelBtn').onclick = closeModal;
 document.getElementById('saveBtn').onclick = saveCard;
 document.getElementById('overlay').onclick = e => { if (e.target.id === 'overlay') closeModal(); };
 document.getElementById('previewClose').onclick = closePreview;
+document.getElementById('dbgClear').onclick = () => { document.getElementById('dbgLog').innerHTML = ''; };
+document.getElementById('dbgHide').onclick = () => { document.getElementById('dbgPanel').classList.remove('show'); };
+document.getElementById('dbgCopy').onclick = () => {
+  const txt = document.getElementById('dbgLog').innerText;
+  if (navigator.clipboard) navigator.clipboard.writeText(txt).then(()=>alert('로그 복사됨')).catch(()=>alert('복사 실패'));
+  else alert(txt);
+};
 document.getElementById('searchInput').oninput = e => { query = e.target.value; render(); };
 document.getElementById('exportBtn').onclick = exportData;
 document.getElementById('importBtn').onclick = () => document.getElementById('importFile').click();
@@ -493,8 +590,48 @@ document.getElementById('installBtn').onclick = async () => {
   deferredPrompt = null;
   document.getElementById('installBtn').style.display = 'none';
 };
+
+/* ---------- 버전 & 업데이트 감지 ---------- */
+const APP_VERSION = 'v1.2';
+document.getElementById('appVersion').textContent = APP_VERSION;
+
+function showUpdateBar() {
+  if (document.getElementById('updateBar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updateBar';
+  bar.innerHTML = `새 버전이 있어요 <button id="reloadBtn">새로고침</button>`;
+  document.body.appendChild(bar);
+  document.getElementById('reloadBtn').onclick = () => {
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.getRegistration().then(reg => {
+        if (reg && reg.waiting) reg.waiting.postMessage('skipWaiting');
+      });
+    }
+    location.reload();
+  };
+}
+
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      // 이미 대기 중인 새 버전이 있으면 알림
+      if (reg.waiting && navigator.serviceWorker.controller) showUpdateBar();
+      // 새 버전이 설치되는 걸 감지
+      reg.addEventListener('updatefound', () => {
+        const nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', () => {
+          if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBar();
+        });
+      });
+      // 주기적으로 업데이트 확인 (앱 켜둔 동안)
+      setInterval(() => reg.update().catch(()=>{}), 60 * 1000);
+    }).catch(()=>{});
+    let refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return; refreshing = true; location.reload();
+    });
+  });
 }
 
 /* ---------- 시작 ---------- */
