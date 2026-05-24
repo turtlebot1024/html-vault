@@ -71,7 +71,27 @@
     font-family: 'Spline Sans Mono', monospace; font-size: .9rem; color: var(--ink);
   }
   .search svg { flex-shrink: 0; opacity: .5; }
-  .tagbar { display: flex; gap: 8px; flex-wrap: wrap; padding-bottom: 26px; }
+  .catbar {
+    display: flex; gap: 8px; overflow-x: auto; padding: 0 0 14px;
+    margin-bottom: 6px; scrollbar-width: thin;
+    border-bottom: 1px dashed var(--line);
+  }
+  .catbar::-webkit-scrollbar { height: 4px; }
+  .catbar::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  .cat {
+    font-family: 'Spline Sans Mono', monospace; font-size: .82rem;
+    padding: 8px 14px; border-radius: var(--radius); border: 1.5px solid var(--line);
+    background: var(--bg-card); color: var(--ink); cursor: pointer; transition: all .15s;
+    white-space: nowrap; flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .cat:hover { border-color: var(--accent); color: var(--accent); }
+  .cat.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .cat .badge {
+    font-size: .68rem; padding: 1px 7px; border-radius: 999px;
+    background: var(--chip); color: var(--ink-soft);
+  }
+  .cat.active .badge { background: var(--accent); color: #fff; }
+  .tagbar { display: flex; gap: 8px; flex-wrap: wrap; padding: 14px 0 26px; }
   .tag {
     font-family: 'Spline Sans Mono', monospace; font-size: .74rem;
     padding: 5px 12px; border-radius: 999px; border: 1.5px solid var(--line);
@@ -104,6 +124,19 @@
   .card .row a:hover, .card .row button:hover { border-color: var(--accent); color: var(--accent); transform: none; box-shadow: none; }
   .card .mini { margin-left: auto; display: flex; gap: 6px; }
   .card .mini button { padding: 7px 10px; }
+  .card .meta-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .card .cat-chip {
+    font-family: 'Spline Sans Mono', monospace; font-size: .66rem;
+    padding: 3px 9px; border-radius: var(--radius); background: var(--ink); color: var(--bg);
+    letter-spacing: .04em;
+  }
+  .pin-btn {
+    background: transparent !important; border: none !important; padding: 2px 6px !important;
+    font-size: 1.1rem !important; line-height: 1; color: var(--ink-soft); cursor: pointer;
+  }
+  .pin-btn.pinned { color: var(--accent); }
+  .pin-btn:hover { transform: none !important; box-shadow: none !important; color: var(--accent); }
+  .card.pinned { border-color: var(--accent); border-width: 2px; }
   .empty {
     text-align: center; padding: 90px 20px; color: var(--ink-soft);
     border: 2px dashed var(--line); border-radius: var(--radius); grid-column: 1/-1;
@@ -234,6 +267,7 @@
     <button class="btn-accent" id="addBtn">+ 새 카드 추가</button>
   </div>
 
+  <div class="catbar" id="catbar"></div>
   <div class="tagbar" id="tagbar"></div>
   <div class="grid" id="grid"></div>
   <footer>이 기기에 저장됩니다 (IndexedDB) · 내보내기로 백업하세요 · <span id="appVersion"></span></footer>
@@ -276,6 +310,12 @@
       <label>HTML 코드 (선택)</label>
       <textarea id="fCode" class="code" placeholder="<!DOCTYPE html> ... 여기에 붙여넣기"></textarea>
       <div class="hint">코드를 붙여넣으면 &lt;title&gt;을 읽어 제목을 자동 입력합니다.</div>
+    </div>
+    <div class="field">
+      <label>카테고리 (1차 분류, 한 개)</label>
+      <input type="text" id="fCategory" placeholder="예: 업무, 투자, 여행, 일상" list="catList">
+      <datalist id="catList"></datalist>
+      <div class="hint">비워두면 "기타"로 분류됩니다.</div>
     </div>
     <div class="field">
       <label>제목</label>
@@ -380,52 +420,117 @@ async function getSetting(k) {
 }
 
 /* ---------- 상태 ---------- */
+const ETC = '기타';
 let items = [];
-let activeTag = null, query = '';
+let activeTag = null, activeCategory = null, query = '';
 
-async function load() { items = await dbAll(); render(); }
+async function load() {
+  items = await dbAll();
+  const savedCat = await getSetting('activeCategory');
+  if (savedCat) activeCategory = savedCat;
+  render();
+}
+function catOf(it) { return (it.category && it.category.trim()) || ETC; }
 function allTags() {
   const s = new Set();
   items.forEach(i => (i.tags||[]).forEach(t => s.add(t)));
   return [...s].sort();
+}
+function allCategories() {
+  const counts = new Map();
+  items.forEach(i => {
+    const c = catOf(i);
+    counts.set(c, (counts.get(c) || 0) + 1);
+  });
+  // 카드 수 많은 순, 동률이면 이름순
+  return [...counts.entries()].sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]));
 }
 function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function fmtDate(ts){ if(!ts) return ''; const d=new Date(ts); return `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,'0')}.${String(d.getDate()).padStart(2,'0')}`; }
 
 function render() {
   document.getElementById('counter').textContent = `// ${items.length}개의 결과물 보관 중`;
+
+  // 카테고리 탭
+  const cats = allCategories();
+  const cb = document.getElementById('catbar'); cb.innerHTML = '';
+  const mkCat = (key, label, count) => {
+    const el = document.createElement('span');
+    const isActive = activeCategory === key || (key === null && activeCategory === null);
+    el.className = 'cat' + (isActive ? ' active' : '');
+    el.innerHTML = `${esc(label)} <span class="badge">${count}</span>`;
+    el.onclick = async () => {
+      logClick('카테고리', label);
+      activeCategory = key;
+      await setSetting('activeCategory', key);
+      render();
+    };
+    cb.appendChild(el);
+  };
+  mkCat(null, '📌 전체', items.length);
+  cats.forEach(([c, n]) => mkCat(c, c, n));
+
+  // 활성 카테고리가 비어버린 경우(삭제 등) 전체로 되돌림
+  if (activeCategory !== null && !cats.find(([c]) => c === activeCategory)) {
+    activeCategory = null;
+    setSetting('activeCategory', null);
+  }
+
+  // 태그 (선택한 카테고리 안의 태그만)
+  const visibleForTags = activeCategory ? items.filter(i => catOf(i) === activeCategory) : items;
+  const tagsSet = new Set();
+  visibleForTags.forEach(i => (i.tags||[]).forEach(t => tagsSet.add(t)));
   const tb = document.getElementById('tagbar'); tb.innerHTML = '';
-  allTags().forEach(t => {
+  [...tagsSet].sort().forEach(t => {
     const el = document.createElement('span');
     el.className = 'tag' + (activeTag === t ? ' active' : '');
     el.textContent = '#' + t;
     el.onclick = () => { logClick('태그', '#' + t); activeTag = activeTag === t ? null : t; render(); };
     tb.appendChild(el);
   });
+  // 선택한 태그가 현재 카테고리에 없으면 해제
+  if (activeTag && !tagsSet.has(activeTag)) activeTag = null;
 
-  let list = items.slice().sort((a,b)=>(b.created||0)-(a.created||0));
+  // 카드 필터링 + 정렬 (핀 우선, 그 다음 최신순)
+  let list = items.slice();
+  if (activeCategory) list = list.filter(i => catOf(i) === activeCategory);
   if (activeTag) list = list.filter(i => (i.tags||[]).includes(activeTag));
   if (query) {
     const q = query.toLowerCase();
     list = list.filter(i =>
       (i.title||'').toLowerCase().includes(q) ||
       (i.desc||'').toLowerCase().includes(q) ||
+      catOf(i).toLowerCase().includes(q) ||
       (i.tags||[]).join(' ').toLowerCase().includes(q));
   }
+  list.sort((a,b) => {
+    const pa = a.pinned ? 1 : 0, pb = b.pinned ? 1 : 0;
+    if (pa !== pb) return pb - pa;
+    return (b.created||0) - (a.created||0);
+  });
+
+  // datalist 갱신 (카테고리 자동완성)
+  const dl = document.getElementById('catList');
+  if (dl) dl.innerHTML = cats.filter(([c]) => c !== ETC).map(([c]) => `<option value="${esc(c)}">`).join('');
 
   const grid = document.getElementById('grid'); grid.innerHTML = '';
   if (list.length === 0) {
-    grid.innerHTML = `<div class="empty"><strong>아직 비어있어요</strong>오른쪽 아래 + 버튼으로 첫 결과물을 추가해보세요.</div>`;
+    grid.innerHTML = `<div class="empty"><strong>${items.length === 0 ? '아직 비어있어요' : '조건에 맞는 카드가 없어요'}</strong>${items.length === 0 ? '오른쪽 아래 + 버튼으로 첫 결과물을 추가해보세요.' : '다른 카테고리나 태그를 선택해보세요.'}</div>`;
     return;
   }
   list.forEach((it, idx) => {
-    const card = document.createElement('div'); card.className = 'card';
+    const card = document.createElement('div'); card.className = 'card' + (it.pinned ? ' pinned' : '');
     const n = String(list.length - idx).padStart(2,'0');
     const tagsHtml = (it.tags||[]).map(t => `<span>#${esc(t)}</span>`).join('');
     const refHtml = it.ref ? `<a href="${esc(it.ref)}" target="_blank" rel="noopener">↗ 대화 보기</a>` : '';
     const previewHtml = it.code ? `<button data-preview="${it.id}">▶ 미리보기 열기</button>` : '';
+    const cat = catOf(it);
     card.innerHTML = `
-      <span class="num">No.${n}</span>
+      <div class="meta-top">
+        <span class="num">No.${n}</span>
+        <button class="pin-btn ${it.pinned ? 'pinned' : ''}" data-pin="${it.id}" title="${it.pinned ? '핀 해제' : '최상단 고정'}">${it.pinned ? '★' : '☆'}</button>
+      </div>
+      <span class="cat-chip">${esc(cat)}</span>
       <h3>${esc(it.title||'제목 없음')}</h3>
       ${it.desc ? `<p class="desc">${esc(it.desc)}</p>` : ''}
       ${tagsHtml ? `<div class="tags">${tagsHtml}</div>` : ''}
@@ -442,6 +547,15 @@ function render() {
   grid.querySelectorAll('[data-preview]').forEach(b => b.onclick = () => { logClick('미리보기', b.dataset.preview); preview(b.dataset.preview); });
   grid.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => { logClick('수정', b.dataset.edit); openModal(b.dataset.edit); });
   grid.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { logClick('삭제', b.dataset.del); del(b.dataset.del); });
+  grid.querySelectorAll('[data-pin]').forEach(b => b.onclick = () => { logClick('핀 토글', b.dataset.pin); togglePin(b.dataset.pin); });
+}
+
+async function togglePin(id) {
+  const it = items.find(i => i.id === id);
+  if (!it) return;
+  it.pinned = !it.pinned;
+  await dbPut(it);
+  render();
 }
 
 async function applyPreviewBg(mode) {
@@ -534,6 +648,7 @@ function openModal(id) {
     const it = items.find(i => i.id === id);
     t.textContent = '카드 수정';
     document.getElementById('editId').value = it.id;
+    document.getElementById('fCategory').value = it.category||'';
     document.getElementById('fTitle').value = it.title||'';
     document.getElementById('fDesc').value = it.desc||'';
     document.getElementById('fTags').value = (it.tags||[]).join(', ');
@@ -541,7 +656,11 @@ function openModal(id) {
     document.getElementById('fCode').value = it.code||'';
   } else {
     t.textContent = '새 카드';
-    ['editId','fTitle','fDesc','fTags','fRef','fCode'].forEach(i => document.getElementById(i).value = '');
+    ['editId','fCategory','fTitle','fDesc','fTags','fRef','fCode'].forEach(i => document.getElementById(i).value = '');
+    // 현재 활성 카테고리가 있으면 새 카드에 미리 채워넣기
+    if (activeCategory && activeCategory !== ETC) {
+      document.getElementById('fCategory').value = activeCategory;
+    }
     setTimeout(()=>document.getElementById('fCode').focus(), 50);
   }
 }
@@ -550,6 +669,7 @@ function closeModal(){ document.getElementById('overlay').classList.remove('open
 async function saveCard() {
   const id = document.getElementById('editId').value;
   const data = {
+    category: document.getElementById('fCategory').value.trim(),
     title: document.getElementById('fTitle').value.trim(),
     desc: document.getElementById('fDesc').value.trim(),
     tags: document.getElementById('fTags').value.split(',').map(s=>s.trim()).filter(Boolean),
@@ -660,7 +780,7 @@ document.getElementById('installBtn').onclick = async () => {
 };
 
 /* ---------- 버전 & 업데이트 감지 ---------- */
-const APP_VERSION = 'v1.4';
+const APP_VERSION = 'v1.5';
 document.getElementById('appVersion').textContent = APP_VERSION;
 
 function showUpdateBar() {
