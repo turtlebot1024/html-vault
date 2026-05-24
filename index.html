@@ -169,6 +169,19 @@
   .field textarea.code { min-height: 200px; font-size: .78rem; line-height: 1.5; }
   .field .hint { font-family:'Spline Sans Mono',monospace; font-size:.68rem; color: var(--ink-soft); margin-top: 6px; }
   .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+  .opt {
+    display: flex; gap: 10px; align-items: flex-start;
+    padding: 12px 14px; border: 1.5px solid var(--line); border-radius: var(--radius);
+    margin-bottom: 8px; cursor: pointer; background: var(--bg);
+    transition: border-color .12s, background .12s;
+  }
+  .opt:hover { border-color: var(--accent); }
+  .opt input { margin-top: 3px; accent-color: var(--accent); flex-shrink: 0; }
+  .opt .opt-text { font-family: 'Spline Sans Mono', monospace; font-size: .78rem; line-height: 1.5; }
+  .opt .opt-text b { display: block; color: var(--ink); margin-bottom: 2px; font-weight: 600; font-size: .84rem; }
+  .opt .opt-text small { color: var(--ink-soft); }
+  .opt:has(input:checked) { border-color: var(--accent); background: var(--bg-card); }
+  .opt.disabled { opacity: .35; pointer-events: none; }
   footer { text-align: center; font-family:'Spline Sans Mono',monospace; font-size: .72rem; color: var(--ink-soft); padding-top: 50px; }
   .fab {
     position: fixed; bottom: 30px; right: 30px; z-index: 40; width: 60px; height: 60px;
@@ -299,6 +312,56 @@
     </span>
   </div>
   <div id="dbgLog"></div>
+</div>
+
+<div class="overlay" id="exportOverlay">
+  <div class="modal">
+    <h2>내보내기</h2>
+    <div class="sub">백업이나 클로드 분석용 메타데이터로 내보낼 수 있어요.</div>
+
+    <div class="field">
+      <label>무엇을 내보낼까요?</label>
+      <label class="opt">
+        <input type="radio" name="exportPreset" value="full" checked>
+        <span class="opt-text">
+          <b>전체 백업</b>
+          <small>모든 필드 + HTML 코드까지 포함. 가져오기로 그대로 복원 가능</small>
+        </span>
+      </label>
+      <label class="opt">
+        <input type="radio" name="exportPreset" value="meta">
+        <span class="opt-text">
+          <b>메타데이터만</b>
+          <small>카테고리·제목·설명·태그만 추출. 클로드에 넣어 재분류·정리 시키기 좋음</small>
+        </span>
+      </label>
+    </div>
+
+    <div class="field" id="exportFormatField">
+      <label>형식</label>
+      <label class="opt">
+        <input type="radio" name="exportFormat" value="json" checked>
+        <span class="opt-text">
+          <b>JSON</b>
+          <small>구조화된 데이터. 클로드가 id 단위로 카드를 다루기 좋음</small>
+        </span>
+      </label>
+      <label class="opt" id="exportFormatMd">
+        <input type="radio" name="exportFormat" value="md">
+        <span class="opt-text">
+          <b>마크다운</b>
+          <small>카테고리별로 그룹된 사람이 읽기 좋은 리스트. 채팅에 그대로 붙여넣기 편함</small>
+        </span>
+      </label>
+    </div>
+
+    <div class="hint" id="exportSummary" style="font-family:'Spline Sans Mono',monospace; font-size:.74rem; color:var(--ink-soft); margin-bottom:14px;"></div>
+
+    <div class="modal-actions">
+      <button id="exportCancel">취소</button>
+      <button class="btn-accent" id="exportConfirm">↓ 내보내기</button>
+    </div>
+  </div>
 </div>
 
 <div class="overlay" id="overlay">
@@ -693,10 +756,96 @@ async function del(id) {
   await dbDel(id); render();
 }
 
-function exportData() {
-  const blob = new Blob([JSON.stringify(items,null,2)], {type:'application/json'});
+function openExportModal() {
+  document.getElementById('exportOverlay').classList.add('open');
+  updateExportSummary();
+}
+function closeExportModal() {
+  document.getElementById('exportOverlay').classList.remove('open');
+}
+function updateExportSummary() {
+  const preset = document.querySelector('input[name="exportPreset"]:checked').value;
+  const formatField = document.getElementById('exportFormatField');
+  if (preset === 'full') {
+    formatField.classList.add('disabled');
+    document.querySelector('input[name="exportFormat"][value="json"]').checked = true;
+  } else {
+    formatField.classList.remove('disabled');
+  }
+  const summary = document.getElementById('exportSummary');
+  const cats = allCategories();
+  const catStr = cats.length ? cats.map(([c,n]) => `${c} ${n}`).join(' · ') : '카드 없음';
+  summary.textContent = `대상: ${items.length}개 (${catStr})`;
+}
+
+function metaJson() {
+  const meta = items.map(i => ({
+    id: i.id,
+    category: catOf(i),
+    title: i.title || '',
+    desc: i.desc || '',
+    tags: i.tags || [],
+    pinned: !!i.pinned,
+    ref: i.ref || '',
+    created: i.created ? new Date(i.created).toISOString() : null
+  }));
+  return JSON.stringify({
+    exportedAt: new Date().toISOString(),
+    totalCount: meta.length,
+    categories: allCategories().map(([c,n]) => ({name: c, count: n})),
+    items: meta
+  }, null, 2);
+}
+
+function metaMarkdown() {
+  const byCat = new Map();
+  items.forEach(i => {
+    const c = catOf(i);
+    if (!byCat.has(c)) byCat.set(c, []);
+    byCat.get(c).push(i);
+  });
+  const sorted = [...byCat.entries()].sort((a,b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+  const now = new Date();
+  const stamp = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+  let md = `# HTML 보관소 메타데이터 (총 ${items.length}개)\n_내보낸 시각: ${stamp}_\n\n`;
+  sorted.forEach(([cat, list]) => {
+    list.sort((a,b)=>(b.created||0)-(a.created||0));
+    md += `## ${cat} (${list.length})\n\n`;
+    list.forEach(i => {
+      const tags = (i.tags||[]).length ? ` [${(i.tags||[]).map(t=>'#'+t).join(', ')}]` : '';
+      const pin = i.pinned ? ' ★' : '';
+      md += `- **${i.title || '제목 없음'}**${pin}${tags}\n`;
+      if (i.desc) md += `  ${i.desc.replace(/\s*\n\s*/g, ' / ')}\n`;
+    });
+    md += '\n';
+  });
+  return md;
+}
+
+function doExport() {
+  const preset = document.querySelector('input[name="exportPreset"]:checked').value;
+  const format = document.querySelector('input[name="exportFormat"]:checked').value;
+  let content, filename, type;
+  if (preset === 'full') {
+    content = JSON.stringify(items, null, 2);
+    filename = 'html-vault-backup.json';
+    type = 'application/json';
+  } else if (format === 'json') {
+    content = metaJson();
+    filename = 'html-vault-meta.json';
+    type = 'application/json';
+  } else {
+    content = metaMarkdown();
+    filename = 'html-vault-meta.md';
+    type = 'text/markdown';
+  }
+  const blob = new Blob([content], {type});
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = 'html-vault-backup.json'; a.click();
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  dbg(`내보내기 완료: ${filename} (${Math.round(content.length/1024)}KB, ${preset}/${format})`);
+  closeExportModal();
 }
 function importData(file) {
   const r = new FileReader();
@@ -745,7 +894,12 @@ document.getElementById('dbgCopy').onclick = () => {
   else alert(txt);
 };
 document.getElementById('searchInput').oninput = e => { query = e.target.value; render(); };
-document.getElementById('exportBtn').onclick = () => { logClick('내보내기'); exportData(); };
+document.getElementById('exportBtn').onclick = () => { logClick('내보내기'); openExportModal(); };
+document.getElementById('exportCancel').onclick = () => { logClick('내보내기 취소'); closeExportModal(); };
+document.getElementById('exportConfirm').onclick = () => { logClick('내보내기 실행'); doExport(); };
+document.getElementById('exportOverlay').onclick = e => { if (e.target.id === 'exportOverlay') closeExportModal(); };
+document.querySelectorAll('input[name="exportPreset"], input[name="exportFormat"]').forEach(r =>
+  r.addEventListener('change', updateExportSummary));
 document.getElementById('importBtn').onclick = () => { logClick('가져오기'); document.getElementById('importFile').click(); };
 document.getElementById('importFile').onchange = e => { if (e.target.files[0]) { dbg('가져오기 파일 선택: ' + e.target.files[0].name); importData(e.target.files[0]); } };
 document.getElementById('themeBtn').onclick = async () => {
@@ -780,7 +934,7 @@ document.getElementById('installBtn').onclick = async () => {
 };
 
 /* ---------- 버전 & 업데이트 감지 ---------- */
-const APP_VERSION = 'v1.5';
+const APP_VERSION = 'v1.6';
 document.getElementById('appVersion').textContent = APP_VERSION;
 
 function showUpdateBar() {
