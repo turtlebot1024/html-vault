@@ -145,11 +145,12 @@
     bottom: calc(30px + env(safe-area-inset-bottom));
   }
   .preview-overlay {
-    position: fixed; inset: 0; z-index: 60; background: var(--bg);
+    position: fixed; inset: 0; z-index: 60; background: #fff;
     display: none; flex-direction: column;
     padding-top: env(safe-area-inset-top);
   }
   .preview-overlay.open { display: flex; }
+  .preview-overlay[data-bg="dark"] { background: #0d0d0d; }
   .preview-bar {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     padding: 12px 16px; border-bottom: 1.5px solid var(--ink); background: var(--bg-card);
@@ -161,6 +162,7 @@
   .preview-btns { display: flex; gap: 8px; flex-shrink: 0; }
   .preview-btns button { padding: 8px 12px; font-size: .76rem; }
   #previewFrame { flex: 1; width: 100%; border: none; background: #fff; }
+  .preview-overlay[data-bg="dark"] #previewFrame { background: #0d0d0d; }
   #updateBar {
     position: fixed; left: 50%; transform: translateX(-50%);
     bottom: calc(24px + env(safe-area-inset-bottom)); z-index: 70;
@@ -194,6 +196,17 @@
   #dbgLog { overflow-y: auto; padding: 10px 12px; white-space: pre-wrap; line-height: 1.6; }
   #dbgLog .err { color: #ff5252; }
   #dbgLog .stop { color: #ffab40; }
+  #dbgToggle {
+    position: fixed; left: 18px; z-index: 81;
+    bottom: calc(24px + env(safe-area-inset-bottom));
+    width: 40px; height: 40px; border-radius: 50%; padding: 0;
+    background: #1a1a1a; color: #00e676; border: 1.5px solid #00e676;
+    font-size: 1.05rem; line-height: 1; opacity: .55;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: none;
+  }
+  #dbgToggle:hover { opacity: 1; transform: translate(-2px,-2px); box-shadow: 3px 3px 0 #00e676; }
+  #dbgToggle.has-err { opacity: 1; background: #ff5252; color: #fff; border-color: #fff; }
 </style>
 </head>
 <body>
@@ -231,12 +244,15 @@
   <div class="preview-bar">
     <span id="previewTitle">미리보기</span>
     <span class="preview-btns">
+      <button id="previewBgBtn" title="배경 색 전환">⬜ 흰</button>
       <button id="previewNewTab" title="새 탭에서 열기">↗ 새 탭</button>
       <button id="previewClose">✕ 닫기</button>
     </span>
   </div>
   <iframe id="previewFrame" sandbox="allow-scripts allow-popups allow-forms allow-modals"></iframe>
 </div>
+
+<button id="dbgToggle" title="디버그 로그 열기/닫기">🐞</button>
 
 <div id="dbgPanel">
   <div id="dbgHead">
@@ -287,16 +303,19 @@
 /* ---------- 디버그 로거 ---------- */
 function dbg(msg) {
   const log = document.getElementById('dbgLog');
-  const panel = document.getElementById('dbgPanel');
-  if (!log || !panel) { console.log('[dbg]', msg); return; }
-  panel.classList.add('show');
+  if (!log) { console.log('[dbg]', msg); return; }
   const line = document.createElement('div');
   const t = new Date().toLocaleTimeString();
-  if (/오류|!!/.test(msg)) line.className = 'err';
+  const isErr = /오류|!!/.test(msg);
+  if (isErr) line.className = 'err';
   else if (/중단/.test(msg)) line.className = 'stop';
   line.textContent = `[${t}] ${msg}`;
   log.appendChild(line);
   log.scrollTop = log.scrollHeight;
+  if (isErr) {
+    const toggle = document.getElementById('dbgToggle');
+    if (toggle) toggle.classList.add('has-err');
+  }
 }
 // 잡히지 않은 오류도 화면에 표시
 window.addEventListener('error', e => {
@@ -420,6 +439,16 @@ function render() {
   grid.querySelectorAll('[data-preview]').forEach(b => b.onclick = () => preview(b.dataset.preview));
   grid.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => openModal(b.dataset.edit));
   grid.querySelectorAll('[data-del]').forEach(b => b.onclick = () => del(b.dataset.del));
+}
+
+async function applyPreviewBg(mode) {
+  const ov = document.getElementById('previewOverlay');
+  const btn = document.getElementById('previewBgBtn');
+  if (!ov) return;
+  const m = mode === 'dark' ? 'dark' : 'light';
+  ov.dataset.bg = m;
+  if (btn) btn.textContent = m === 'dark' ? '⬛ 검' : '⬜ 흰';
+  await setSetting('previewBg', m);
 }
 
 function preview(id) {
@@ -551,6 +580,16 @@ document.getElementById('cancelBtn').onclick = closeModal;
 document.getElementById('saveBtn').onclick = saveCard;
 document.getElementById('overlay').onclick = e => { if (e.target.id === 'overlay') closeModal(); };
 document.getElementById('previewClose').onclick = closePreview;
+document.getElementById('previewBgBtn').onclick = () => {
+  const ov = document.getElementById('previewOverlay');
+  const cur = ov.dataset.bg === 'dark' ? 'dark' : 'light';
+  applyPreviewBg(cur === 'dark' ? 'light' : 'dark');
+};
+document.getElementById('dbgToggle').onclick = () => {
+  const panel = document.getElementById('dbgPanel');
+  panel.classList.toggle('show');
+  document.getElementById('dbgToggle').classList.remove('has-err');
+};
 document.getElementById('dbgClear').onclick = () => { document.getElementById('dbgLog').innerHTML = ''; };
 document.getElementById('dbgHide').onclick = () => { document.getElementById('dbgPanel').classList.remove('show'); };
 document.getElementById('dbgCopy').onclick = () => {
@@ -592,7 +631,7 @@ document.getElementById('installBtn').onclick = async () => {
 };
 
 /* ---------- 버전 & 업데이트 감지 ---------- */
-const APP_VERSION = 'v1.2';
+const APP_VERSION = 'v1.3';
 document.getElementById('appVersion').textContent = APP_VERSION;
 
 function showUpdateBar() {
@@ -638,6 +677,8 @@ if ('serviceWorker' in navigator) {
 (async () => {
   const t = await getSetting('theme');
   if (t) document.documentElement.setAttribute('data-theme', t);
+  const pb = await getSetting('previewBg');
+  applyPreviewBg(pb === 'dark' ? 'dark' : 'light');
   await load();
 })();
 </script>
