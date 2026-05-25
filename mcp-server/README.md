@@ -11,7 +11,7 @@ GitHub Contents API. The PWA syncs the same file, so the two stay in sync.
 Two ways to run the same tools (they share `src/core.ts` + `src/tools.ts`):
 - **stdio** (`src/index.ts`) → for **Claude Desktop** on your PC. Simplest.
 - **Cloudflare Worker** (`src/worker.ts`) → a **remote** server for **Claude on
-  phone / web / desktop**, gated by GitHub login. See "Remote (phone/web)" below.
+  phone / web / desktop**. See "Remote (phone/web)" below.
 
 In both, the GitHub token that touches the data repo is held **server-side**
 (env var or Worker secret) and is never given to Claude.
@@ -81,63 +81,55 @@ Edit `claude_desktop_config.json`:
 
 Restart Claude Desktop. You should see the `html-vault` tools available.
 
-## Remote (phone / web) — Cloudflare Worker + GitHub OAuth
+## Remote (phone / web) — Cloudflare Worker, deployed from your phone
 
-This deploys the same tools as a public HTTPS endpoint that Claude on **phone,
-web, or desktop** can connect to. Only your GitHub account may connect (OAuth
-login gate); the repo is accessed with the server-side `GITHUB_TOKEN` secret.
+The same tools, as a public HTTPS endpoint that Claude on **phone / web / desktop**
+can connect to. This setup is **authless**: access control is the unguessable
+`workers.dev` URL, and the repo is reached with the server-side `GITHUB_TOKEN`
+secret (never sent to Claude).
 
 ```
-[Claude phone/web] --GitHub OAuth--> [Cloudflare Worker /mcp] --GITHUB_TOKEN--> [html-vault-data]
+[Claude phone/web] --> [Cloudflare Worker /mcp] --GITHUB_TOKEN(secret)--> [html-vault-data]
 ```
 
-### A. One-time Cloudflare + GitHub OAuth setup
+> Authless = anyone who knows the exact Worker URL could read/write your cards.
+> Fine for a personal vault with a random URL. To add a GitHub-login gate later,
+> wrap the handlers in `@cloudflare/workers-oauth-provider` (see git history).
 
-1. Install deps and log in to Cloudflare:
-   ```bash
-   cd mcp-server
-   npm install
-   npx wrangler login
-   ```
-2. Create the KV namespace used by the OAuth provider, then paste the printed id
-   into `wrangler.jsonc` → `kv_namespaces[0].id` (replacing `REPLACE_WITH_KV_NAMESPACE_ID`):
-   ```bash
-   npx wrangler kv namespace create OAUTH_KV
-   ```
-3. Edit `wrangler.jsonc` → `vars`: set `VAULT_REPO` and `ALLOWED_GITHUB_LOGIN`
-   (your GitHub username; comma-separate to allow more than one).
-4. Create a **GitHub OAuth App** (GitHub → Settings → Developer settings → OAuth Apps
-   → New). You will fill the two URLs after the first deploy gives you the Worker URL,
-   so for now use a placeholder and update in step 6.
-   - Authorization callback URL: `https://<worker-url>/callback`
-5. Set the secrets (prompts for each value; never commit these):
-   ```bash
-   npx wrangler secret put GITHUB_TOKEN          # fine-grained PAT, Contents R/W on data repo
-   npx wrangler secret put GITHUB_CLIENT_ID       # from the GitHub OAuth App
-   npx wrangler secret put GITHUB_CLIENT_SECRET   # from the GitHub OAuth App
-   ```
-6. Deploy, then put the real Worker URL into the GitHub OAuth App's Homepage URL
-   (`https://<worker-url>`) and callback URL (`https://<worker-url>/callback`):
-   ```bash
-   npm run deploy
-   ```
-   The MCP endpoint is `https://<name>.<your-subdomain>.workers.dev/mcp`.
+### Deploy with no computer — GitHub Actions
 
-### B. Add the connector in Claude (phone / web)
+A workflow at `.github/workflows/deploy-mcp-worker.yml` runs `wrangler deploy` in CI,
+so you can do everything from the **GitHub app / website + Cloudflare dashboard** on
+your phone.
+
+1. **Cloudflare** (dashboard.cloudflare.com on mobile): sign up (free). Copy your
+   **Account ID** (Workers & Pages → right sidebar). Create an **API token**
+   (My Profile → API Tokens → Create Token → template *Edit Cloudflare Workers*).
+2. **GitHub** → this repo → **Settings → Secrets and variables → Actions → New repository secret**.
+   Add three secrets:
+   - `CLOUDFLARE_API_TOKEN` — the token from step 1
+   - `CLOUDFLARE_ACCOUNT_ID` — the account id from step 1
+   - `VAULT_GITHUB_PAT` — a fine-grained GitHub PAT, *Only* `html-vault-data`,
+     **Contents: Read and write** (named `VAULT_GITHUB_PAT` because `GITHUB_TOKEN`
+     is a reserved Actions name)
+3. **GitHub** → **Actions** tab → **Deploy MCP Worker** → **Run workflow**.
+   When it finishes, open the *Deploy worker* step log and copy the published URL —
+   your endpoint is `https://html-vault-mcp.<your-subdomain>.workers.dev/mcp`.
+
+(If you do have a computer, the same thing is just `cd mcp-server && npm install &&
+npx wrangler login && npx wrangler secret put GITHUB_TOKEN && npm run deploy`.)
+
+### Add the connector in Claude (phone / web)
 
 Claude → **Settings → Connectors → Add custom connector** → paste the `/mcp` URL →
-**Add** → click **Connect** and complete the GitHub login. (Custom connectors work on
-Free/Pro/Max; Free allows one.) After connecting, ask Claude things like "list my
-html-vault categories" or "save this HTML as a card in 업무".
+**Add**. (Custom connectors work on Free/Pro/Max; Free allows one.) Then ask Claude
+things like "list my html-vault categories" or "save this HTML as a card in 업무".
 
-### Local development
+### Local development (optional, needs a computer)
 
 ```bash
-# put real values in mcp-server/.dev.vars (gitignored):
-#   GITHUB_TOKEN="..."
-#   GITHUB_CLIENT_ID="..."
-#   GITHUB_CLIENT_SECRET="..."
-npm run cf-dev          # http://localhost:8787 ; /mcp is OAuth-gated (401 without a token)
+echo 'GITHUB_TOKEN="<pat>"' > mcp-server/.dev.vars   # gitignored
+npm run cf-dev          # http://localhost:8787/mcp  (authless)
 npm run typecheck:worker
 ```
 
@@ -145,19 +137,14 @@ npm run typecheck:worker
 
 | Var | Required | Default | Meaning |
 |-----|----------|---------|---------|
-| `GITHUB_TOKEN` | yes | — | PAT with Contents read/write on the data repo |
+| `GITHUB_TOKEN` | yes | — | PAT/secret with Contents read/write on the data repo |
 | `VAULT_REPO` | yes | — | `owner/repo` of the data repo |
 | `VAULT_PATH` | no | `cards.json` | path to the JSON file in the repo |
 | `VAULT_BRANCH` | no | `main` | branch |
 | `VAULT_READONLY` | no | `false` | `true` hides the write tools |
 
-Worker-only (set as secrets / `vars`, not used by stdio):
-
-| Var | Required | Meaning |
-|-----|----------|---------|
-| `GITHUB_CLIENT_ID` | yes | GitHub OAuth App client id (login gate) |
-| `GITHUB_CLIENT_SECRET` | yes | GitHub OAuth App client secret |
-| `ALLOWED_GITHUB_LOGIN` | no | comma-separated GitHub usernames allowed to connect; empty = any |
+For the Worker, `VAULT_*` live in `wrangler.jsonc` → `vars`; `GITHUB_TOKEN` is a
+secret (set by the deploy workflow or `wrangler secret put`).
 
 ## Data format
 

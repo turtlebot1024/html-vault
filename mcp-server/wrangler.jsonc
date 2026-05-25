@@ -18,18 +18,11 @@
       }
     ]
   },
-  "kv_namespaces": [
-    {
-      "binding": "OAUTH_KV",
-      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
-    }
-  ],
   "vars": {
     "VAULT_REPO": "turtlebot1024/html-vault-data",
     "VAULT_PATH": "cards.json",
     "VAULT_BRANCH": "main",
-    "VAULT_READONLY": "false",
-    "ALLOWED_GITHUB_LOGIN": "turtlebot1024"
+    "VAULT_READONLY": "false"
   },
   "observability": {
     "enabled": true
