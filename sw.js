@@ -1,4 +1,4 @@
-const VERSION = 'v1.6';
+const VERSION = 'v1.7';
 const CACHE = 'html-vault-' + VERSION;
 const ASSETS = ['./', './index.html', './manifest.json'];
 

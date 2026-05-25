@@ -1,0 +1,35 @@
+{
+  "name": "html-vault-mcp",
+  "version": "1.1.0",
+  "description": "MCP server for html-vault — read and write cards stored in a GitHub repo (stdio + Cloudflare Worker)",
+  "type": "module",
+  "bin": {
+    "html-vault-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "typecheck:worker": "tsc -p tsconfig.worker.json --noEmit",
+    "cf-dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.0.5",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "agents": "^0.0.80",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240000.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.80.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -266,6 +266,7 @@
     <div class="head-actions">
       <button id="installBtn" class="btn-accent">⤓ 앱 설치</button>
       <button id="themeBtn" title="테마 전환">◐ 테마</button>
+      <button id="syncBtn" title="GitHub 동기화">☁ 동기화</button>
       <button id="exportBtn">↓ 내보내기</button>
       <button id="importBtn">↑ 가져오기</button>
       <input type="file" id="importFile" accept="application/json" hidden>
@@ -312,6 +313,40 @@
     </span>
   </div>
   <div id="dbgLog"></div>
+</div>
+
+<div class="overlay" id="syncOverlay">
+  <div class="modal">
+    <h2>GitHub 동기화</h2>
+    <div class="sub">카드 데이터를 private repo에 올리고/내려받습니다. 토큰은 이 기기에만 저장됩니다.</div>
+    <div class="field">
+      <label>Personal Access Token (PAT)</label>
+      <input type="password" id="ghToken" placeholder="github_pat_... 또는 ghp_...">
+      <div class="hint">fine-grained 토큰 권장 · 대상 repo의 Contents 권한 read/write</div>
+    </div>
+    <div class="field">
+      <label>저장소 (owner / repo)</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="ghOwner" placeholder="turtlebot1024" style="flex:1;">
+        <input type="text" id="ghRepo" placeholder="html-vault-data" style="flex:1;">
+      </div>
+    </div>
+    <div class="field">
+      <label>파일 경로 / 브랜치</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="ghPath" placeholder="cards.json" style="flex:2;">
+        <input type="text" id="ghBranch" placeholder="main" style="flex:1;">
+      </div>
+    </div>
+    <div class="hint" id="syncStatus" style="font-family:'Spline Sans Mono',monospace; font-size:.74rem; color:var(--ink-soft); margin-bottom:14px; white-space:pre-wrap;"></div>
+    <div class="modal-actions" style="justify-content:space-between;">
+      <button id="syncClose">닫기</button>
+      <span style="display:flex; gap:8px;">
+        <button id="syncPullBtn" title="GitHub → 이 기기">↓ 내려받기</button>
+        <button class="btn-accent" id="syncPushBtn" title="이 기기 → GitHub">↑ 올리기</button>
+      </span>
+    </div>
+  </div>
 </div>
 
 <div class="overlay" id="exportOverlay">
@@ -866,6 +901,113 @@ function importData(file) {
   r.readAsText(file);
 }
 
+/* ---------- GitHub 동기화 ---------- */
+function utf8ToBase64(str) { return btoa(unescape(encodeURIComponent(str))); }
+function base64ToUtf8(b64) { return decodeURIComponent(escape(atob(b64.replace(/\n/g, '')))); }
+
+async function getGhConfig() {
+  return {
+    token: await getSetting('ghToken') || '',
+    owner: await getSetting('ghOwner') || '',
+    repo: await getSetting('ghRepo') || '',
+    path: await getSetting('ghPath') || 'cards.json',
+    branch: await getSetting('ghBranch') || 'main',
+  };
+}
+function ghApiUrl(cfg) {
+  return `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${cfg.path.split('/').map(encodeURIComponent).join('/')}`;
+}
+function ghHeaders(cfg) {
+  return { 'Authorization': 'Bearer ' + cfg.token, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+}
+async function ghGetFile(cfg) {
+  const url = ghApiUrl(cfg) + '?ref=' + encodeURIComponent(cfg.branch);
+  const res = await fetch(url, { headers: ghHeaders(cfg) });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('GET ' + res.status + ' ' + (await res.text()).slice(0,120));
+  const j = await res.json();
+  return { sha: j.sha, content: base64ToUtf8(j.content || '') };
+}
+async function ghPutFile(cfg, contentStr, sha, message) {
+  const body = { message: message || ('html-vault sync ' + new Date().toISOString()), content: utf8ToBase64(contentStr), branch: cfg.branch };
+  if (sha) body.sha = sha;
+  const res = await fetch(ghApiUrl(cfg), { method: 'PUT', headers: ghHeaders(cfg), body: JSON.stringify(body) });
+  if (!res.ok) throw new Error('PUT ' + res.status + ' ' + (await res.text()).slice(0,120));
+  return res.json();
+}
+function syncStatus(msg, isErr) {
+  const el = document.getElementById('syncStatus');
+  if (el) { el.textContent = msg; el.style.color = isErr ? '#ff5252' : 'var(--ink-soft)'; }
+  dbg((isErr ? '!! 동기화 오류: ' : '동기화: ') + msg);
+}
+async function openSyncModal() {
+  document.getElementById('syncOverlay').classList.add('open');
+  const cfg = await getGhConfig();
+  document.getElementById('ghToken').value = cfg.token;
+  document.getElementById('ghOwner').value = cfg.owner;
+  document.getElementById('ghRepo').value = cfg.repo;
+  document.getElementById('ghPath').value = cfg.path;
+  document.getElementById('ghBranch').value = cfg.branch;
+  const last = await getSetting('ghLastSync');
+  syncStatus(last ? '마지막 동기화: ' + last : '아직 동기화한 적 없음');
+}
+function closeSyncModal() { document.getElementById('syncOverlay').classList.remove('open'); }
+async function saveGhConfig() {
+  await setSetting('ghToken', document.getElementById('ghToken').value.trim());
+  await setSetting('ghOwner', document.getElementById('ghOwner').value.trim());
+  await setSetting('ghRepo', document.getElementById('ghRepo').value.trim());
+  await setSetting('ghPath', (document.getElementById('ghPath').value.trim() || 'cards.json'));
+  await setSetting('ghBranch', (document.getElementById('ghBranch').value.trim() || 'main'));
+}
+function validateGh(cfg) {
+  if (!cfg.token) return '토큰을 입력하세요';
+  if (!cfg.owner || !cfg.repo) return 'owner와 repo를 입력하세요';
+  return null;
+}
+async function syncPush() {
+  await saveGhConfig();
+  const cfg = await getGhConfig();
+  const err = validateGh(cfg); if (err) { syncStatus(err, true); return; }
+  try {
+    syncStatus('원격 상태 확인 중...');
+    const remote = await ghGetFile(cfg);
+    const payload = JSON.stringify({ app: 'html-vault', version: APP_VERSION, updatedAt: Date.now(), count: items.length, items }, null, 2);
+    syncStatus(remote ? '기존 파일에 덮어쓰는 중...' : '새 파일 생성 중...');
+    await ghPutFile(cfg, payload, remote ? remote.sha : null, `html-vault: ${items.length}개 카드 업로드`);
+    const stamp = new Date().toLocaleString();
+    await setSetting('ghLastSync', stamp);
+    syncStatus('올리기 완료 ✓ (' + items.length + '개) · ' + stamp);
+  } catch (e) { syncStatus(e.message, true); }
+}
+async function syncPull() {
+  await saveGhConfig();
+  const cfg = await getGhConfig();
+  const err = validateGh(cfg); if (err) { syncStatus(err, true); return; }
+  try {
+    syncStatus('내려받는 중...');
+    const remote = await ghGetFile(cfg);
+    if (!remote) { syncStatus('원격에 파일이 없습니다. 먼저 올리기를 해주세요.', true); return; }
+    const data = JSON.parse(remote.content);
+    const remoteItems = Array.isArray(data) ? data : (data.items || []);
+    if (!Array.isArray(remoteItems)) throw new Error('파일 형식 오류');
+    if (!confirm(`원격의 ${remoteItems.length}개 카드로 이 기기를 덮어씁니다.\n(현재 ${items.length}개 → 대체) 계속할까요?\n\n걱정되면 먼저 내보내기로 백업하세요.`)) {
+      syncStatus('내려받기 취소됨'); return;
+    }
+    for (const it of items) await dbDel(it.id);
+    for (const it of remoteItems) {
+      if (!it.id) it.id = 'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+      if (!it.created) it.created = Date.now();
+      await dbPut(it);
+    }
+    items = await dbAll();
+    activeCategory = null; activeTag = null;
+    render();
+    const stamp = new Date().toLocaleString();
+    await setSetting('ghLastSync', stamp);
+    syncStatus('내려받기 완료 ✓ (' + remoteItems.length + '개) · ' + stamp);
+  } catch (e) { syncStatus(e.message, true); }
+}
+
 /* ---------- 이벤트 ---------- */
 document.getElementById('addBtn').onclick = () => { logClick('새 카드 추가(상단)'); openModal(); };
 document.getElementById('fabBtn').onclick = () => { logClick('+ FAB'); openModal(); };
@@ -902,6 +1044,11 @@ document.querySelectorAll('input[name="exportPreset"], input[name="exportFormat"
   r.addEventListener('change', updateExportSummary));
 document.getElementById('importBtn').onclick = () => { logClick('가져오기'); document.getElementById('importFile').click(); };
 document.getElementById('importFile').onchange = e => { if (e.target.files[0]) { dbg('가져오기 파일 선택: ' + e.target.files[0].name); importData(e.target.files[0]); } };
+document.getElementById('syncBtn').onclick = () => { logClick('동기화 열기'); openSyncModal(); };
+document.getElementById('syncClose').onclick = () => { logClick('동기화 닫기'); saveGhConfig(); closeSyncModal(); };
+document.getElementById('syncOverlay').onclick = e => { if (e.target.id === 'syncOverlay') { saveGhConfig(); closeSyncModal(); } };
+document.getElementById('syncPushBtn').onclick = () => { logClick('올리기'); syncPush(); };
+document.getElementById('syncPullBtn').onclick = () => { logClick('내려받기'); syncPull(); };
 document.getElementById('themeBtn').onclick = async () => {
   const cur = document.documentElement.getAttribute('data-theme');
   const next = cur === 'dark' ? 'light' : 'dark';
@@ -934,7 +1081,7 @@ document.getElementById('installBtn').onclick = async () => {
 };
 
 /* ---------- 버전 & 업데이트 감지 ---------- */
-const APP_VERSION = 'v1.6';
+const APP_VERSION = 'v1.7';
 document.getElementById('appVersion').textContent = APP_VERSION;
 
 function showUpdateBar() {
