@@ -1,0 +1,28 @@
+{
+  "name": "html-vault-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for html-vault — read and write cards stored in a GitHub repo",
+  "type": "module",
+  "bin": {
+    "html-vault-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
