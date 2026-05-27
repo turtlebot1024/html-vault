@@ -626,6 +626,7 @@ function render() {
     const tagsHtml = (it.tags||[]).map(t => `<span>#${esc(t)}</span>`).join('');
     const refHtml = it.ref ? `<a href="${esc(it.ref)}" target="_blank" rel="noopener">↗ 대화 보기</a>` : '';
     const previewHtml = it.code ? `<button data-preview="${it.id}">▶ 미리보기 열기</button>` : '';
+    const uploadHtml = it.code ? `<button data-upload="${it.id}" title="이 HTML을 레포에 .html 파일로 올리기">☁↑ 레포</button>` : '';
     const cat = catOf(it);
     card.innerHTML = `
       <div class="meta-top">
@@ -638,7 +639,7 @@ function render() {
       ${tagsHtml ? `<div class="tags">${tagsHtml}</div>` : ''}
       <span class="date">${fmtDate(it.created)}</span>
       <div class="row">
-        ${previewHtml}${refHtml}
+        ${previewHtml}${uploadHtml}${refHtml}
         <span class="mini">
           <button data-edit="${it.id}" title="수정">✎</button>
           <button data-del="${it.id}" title="삭제">🗑</button>
@@ -650,6 +651,7 @@ function render() {
   grid.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => { logClick('수정', b.dataset.edit); openModal(b.dataset.edit); });
   grid.querySelectorAll('[data-del]').forEach(b => b.onclick = () => { logClick('삭제', b.dataset.del); del(b.dataset.del); });
   grid.querySelectorAll('[data-pin]').forEach(b => b.onclick = () => { logClick('핀 토글', b.dataset.pin); togglePin(b.dataset.pin); });
+  grid.querySelectorAll('[data-upload]').forEach(b => b.onclick = () => { logClick('레포에 올리기', b.dataset.upload); uploadCardHtml(b.dataset.upload); });
 }
 
 async function togglePin(id) {
@@ -939,6 +941,46 @@ async function ghPutFile(cfg, contentStr, sha, message) {
   if (!res.ok) throw new Error('PUT ' + res.status + ' ' + (await res.text()).slice(0,120));
   return res.json();
 }
+// 임의 경로용 (카드별 .html 업로드 등) — cfg.path와 무관하게 path 지정
+function ghApiUrlFor(cfg, path) {
+  return `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
+}
+async function ghGetSha(cfg, path) {
+  const res = await fetch(ghApiUrlFor(cfg, path) + '?ref=' + encodeURIComponent(cfg.branch), { headers: ghHeaders(cfg) });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('GET ' + res.status + ' ' + (await res.text()).slice(0,120));
+  return (await res.json()).sha;
+}
+async function ghPutPath(cfg, path, contentStr, sha, message) {
+  const body = { message, content: utf8ToBase64(contentStr), branch: cfg.branch };
+  if (sha) body.sha = sha;
+  const res = await fetch(ghApiUrlFor(cfg, path), { method: 'PUT', headers: ghHeaders(cfg), body: JSON.stringify(body) });
+  if (!res.ok) throw new Error('PUT ' + res.status + ' ' + (await res.text()).slice(0,120));
+  return res.json();
+}
+
+// 카드 한 개의 HTML을 레포에 html/<id>.html 파일로 올림 (생성/갱신). 기존 동기화 토큰 재사용.
+async function uploadCardHtml(id) {
+  const it = items.find(i => i.id === id);
+  if (!it) return;
+  if (!it.code) { alert('이 카드에는 HTML 코드가 없어요.'); return; }
+  const cfg = await getGhConfig();
+  if (!cfg.token || !cfg.owner || !cfg.repo) {
+    alert('먼저 상단 ☁ 동기화에서 GitHub 토큰과 저장소를 설정해주세요.');
+    return;
+  }
+  const path = 'html/' + id + '.html';
+  dbg('레포 업로드 시도: ' + cfg.owner + '/' + cfg.repo + '/' + path + ' (' + it.code.length + '자)');
+  try {
+    const sha = await ghGetSha(cfg, path);
+    await ghPutPath(cfg, path, it.code, sha, `html-vault: ${sha ? 'update' : 'add'} ${(it.title || id).slice(0,60)}`);
+    dbg('레포 업로드 완료: ' + path + (sha ? ' (갱신)' : ' (새 파일)'));
+    alert((sha ? '레포에서 갱신했어요' : '레포에 올렸어요') + ':\n' + cfg.owner + '/' + cfg.repo + '/' + path);
+  } catch (e) {
+    dbg('!! 레포 업로드 실패: ' + e.message);
+    alert('올리기 실패: ' + e.message);
+  }
+}
 function syncStatus(msg, isErr) {
   const el = document.getElementById('syncStatus');
   if (el) { el.textContent = msg; el.style.color = isErr ? '#ff5252' : 'var(--ink-soft)'; }
@@ -1105,7 +1147,7 @@ document.getElementById('installBtn').onclick = async () => {
 };
 
 /* ---------- 버전 & 업데이트 감지 ---------- */
-const APP_VERSION = 'v1.8';
+const APP_VERSION = 'v1.9';
 document.getElementById('appVersion').textContent = APP_VERSION;
 
 function showUpdateBar() {
