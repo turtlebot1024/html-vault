@@ -405,9 +405,13 @@
     <div class="sub">HTML 코드를 붙여넣으면 제목이 자동으로 채워지고 미리보기가 열립니다.</div>
     <input type="hidden" id="editId">
     <div class="field">
-      <label>HTML 코드 (선택)</label>
+      <label style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+        <span>HTML 코드 (선택)</span>
+        <button type="button" id="fFileBtn" style="text-transform:none; letter-spacing:0; padding:6px 10px; font-size:.72rem;">📁 HTML 파일 선택</button>
+      </label>
+      <input type="file" id="fFile" accept=".html,.htm,text/html" hidden>
       <textarea id="fCode" class="code" placeholder="<!DOCTYPE html> ... 여기에 붙여넣기"></textarea>
-      <div class="hint">코드를 붙여넣으면 &lt;title&gt;을 읽어 제목을 자동 입력합니다.</div>
+      <div class="hint">코드를 붙여넣거나 HTML 파일을 올리면 &lt;title&gt;을 읽어 제목을 자동 입력합니다.</div>
     </div>
     <div class="field">
       <label>카테고리 (1차 분류, 한 개)</label>
@@ -1056,14 +1060,34 @@ document.getElementById('themeBtn').onclick = async () => {
   document.documentElement.setAttribute('data-theme', next);
   await setSetting('theme', next);
 };
-// 코드 붙여넣을 때 title 자동 추출 (제목이 비어있을 때만)
-document.getElementById('fCode').addEventListener('input', e => {
+// 코드가 들어오면 title 자동 추출 (제목이 비어있을 때만)
+function autofillTitleFromCode(code) {
   const titleEl = document.getElementById('fTitle');
   if (!titleEl.value.trim()) {
-    const t = extractTitle(e.target.value);
-    if (t) { titleEl.value = t; }
+    const t = extractTitle(code);
+    if (t) titleEl.value = t;
   }
-});
+}
+document.getElementById('fCode').addEventListener('input', e => autofillTitleFromCode(e.target.value));
+
+// HTML 파일 올리기 → #fCode 채우고 제목 자동 추출 (완전 로컬, 서버 전송 없음)
+document.getElementById('fFileBtn').onclick = () => { logClick('HTML 파일 선택'); document.getElementById('fFile').click(); };
+document.getElementById('fFile').onchange = e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const okType = /\.html?$/i.test(file.name) || file.type === 'text/html';
+  if (!okType) { alert('HTML 파일(.html, .htm)만 올릴 수 있어요.'); e.target.value = ''; return; }
+  dbg('HTML 파일 읽기: ' + file.name + ' (' + Math.round(file.size/1024) + 'KB)');
+  const r = new FileReader();
+  r.onload = () => {
+    document.getElementById('fCode').value = r.result;
+    autofillTitleFromCode(r.result);
+    dbg('파일 읽기 완료 → fCode 채움 (' + String(r.result).length + '자)');
+  };
+  r.onerror = () => { dbg('!! 파일 읽기 실패: ' + file.name); alert('파일을 읽지 못했어요. 다시 시도해주세요.'); };
+  r.readAsText(file);
+  e.target.value = ''; // 같은 파일 다시 선택 가능하도록 초기화
+};
 
 /* ---------- PWA 설치 ---------- */
 let deferredPrompt = null;
@@ -1081,7 +1105,7 @@ document.getElementById('installBtn').onclick = async () => {
 };
 
 /* ---------- 버전 & 업데이트 감지 ---------- */
-const APP_VERSION = 'v1.7';
+const APP_VERSION = 'v1.8';
 document.getElementById('appVersion').textContent = APP_VERSION;
 
 function showUpdateBar() {
